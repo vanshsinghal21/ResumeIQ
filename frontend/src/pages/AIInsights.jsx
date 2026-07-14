@@ -28,13 +28,13 @@ export default function AIInsights() {
       const token = localStorage.getItem("token");
 
       const response = await axios.get(
-        `http://localhost:5000/api/resume/analysis/${id}`,
-        {
+            `${import.meta.env.VITE_API_URL}/resume/analysis/${id}`,
+          {
           headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
+         Authorization: `Bearer ${token}`,
+        },
+      }
+    );
 
       setResume(response.data.resume);
     } catch (err) {
