@@ -17,6 +17,8 @@ import { analyzeResume } from "../services/geminiService.js";
 // ======================================================
 
 export const uploadResume = async (req, res) => {
+  let uploadedFileName = null;
+
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -26,6 +28,12 @@ export const uploadResume = async (req, res) => {
     }
 
     const fileName = `${Date.now()}-${req.file.originalname}`;
+
+    uploadedFileName = fileName;
+
+    // ==================================================
+    // Upload Resume To S3
+    // ==================================================
 
     await s3.send(
       new PutObjectCommand({
@@ -38,48 +46,210 @@ export const uploadResume = async (req, res) => {
 
     const fileUrl = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${fileName}`;
 
-    // Extract resume text
-    const resumeText = await extractResumeText(req.file.buffer);
+    // ==================================================
+    // Extract Resume Text
+    // ==================================================
 
+    const resumeText = await extractResumeText(
+      req.file.buffer
+    );
+
+    if (!resumeText || resumeText.trim().length < 100) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Unable to extract enough readable text from this resume.",
+      });
+    }
+
+    // ==================================================
     // AI Analysis
-    const aiResult = await analyzeResume(resumeText);
+    // ==================================================
+
+    const aiResult = await analyzeResume(
+      resumeText
+    );
+
+    if (!aiResult) {
+      throw new Error(
+        "AI analysis returned no result."
+      );
+    }
+
+    // ==================================================
+    // Create Resume Record
+    // ==================================================
 
     const resume = await Resume.create({
       user: req.user.id,
 
       title:
         req.body.title ||
-        req.file.originalname.replace(/\.[^/.]+$/, ""),
+        req.file.originalname.replace(
+          /\.[^/.]+$/,
+          ""
+        ),
 
       fileName,
       fileUrl,
 
-      score: aiResult.score || 0,
-      summary: aiResult.summary || "",
+      // ==================================================
+      // Overall AI Analysis
+      // ==================================================
 
-      strengths: aiResult.strengths || [],
-      weaknesses: aiResult.weaknesses || [],
-      missingSkills: aiResult.missingSkills || [],
-      suggestions: aiResult.suggestions || [],
+      score:
+        typeof aiResult.score === "number"
+          ? aiResult.score
+          : 0,
+
+      summary:
+        aiResult.summary || "",
+
+      // ==================================================
+      // Resume Context
+      // ==================================================
+
+      detectedDomain:
+        aiResult.detectedDomain || "",
+
+      targetRoles:
+        Array.isArray(aiResult.targetRoles)
+          ? aiResult.targetRoles
+          : [],
+
+      // ==================================================
+      // Score Breakdown
+      // ==================================================
+
+      scoreBreakdown:
+        aiResult.scoreBreakdown || {
+          technicalSkills: 0,
+          experience: 0,
+          projects: 0,
+          education: 0,
+          certifications: 0,
+          achievements: 0,
+          keywords: 0,
+          atsCompatibility: 0,
+        },
+
+      // ==================================================
+      // Detailed Feedback
+      // ==================================================
+
+      strengths:
+        Array.isArray(aiResult.strengths)
+          ? aiResult.strengths
+          : [],
+
+      weaknesses:
+        Array.isArray(aiResult.weaknesses)
+          ? aiResult.weaknesses
+          : [],
+
+      missingSkills:
+        Array.isArray(aiResult.missingSkills)
+          ? aiResult.missingSkills
+          : [],
+
+      suggestions:
+        Array.isArray(aiResult.suggestions)
+          ? aiResult.suggestions
+          : [],
 
       analysisStatus: "Completed",
+
+      analysisError: "",
     });
 
-    res.status(201).json({
+    // ==================================================
+    // Success Response
+    // ==================================================
+
+    return res.status(201).json({
       success: true,
-      message: "Resume uploaded successfully.",
+      message: "Resume uploaded and analyzed successfully.",
       resume,
     });
 
   } catch (error) {
 
-    console.error("Upload Resume Error:", error);
+    console.error(
+      "Upload Resume Error:",
+      error
+    );
 
-    res.status(500).json({
+    // ==================================================
+    // Cleanup S3 File If Analysis/Database Fails
+    // ==================================================
+
+    if (uploadedFileName) {
+      try {
+        await s3.send(
+          new DeleteObjectCommand({
+            Bucket:
+              process.env.AWS_BUCKET_NAME,
+            Key: uploadedFileName,
+          })
+        );
+
+        console.log(
+          "S3 cleanup completed after upload failure."
+        );
+
+      } catch (cleanupError) {
+
+        console.error(
+          "S3 Cleanup Error:",
+          cleanupError
+        );
+      }
+    }
+
+    // ==================================================
+    // AI Analysis Error
+    // ==================================================
+
+    if (
+      error.message?.includes(
+        "AI resume analysis failed"
+      )
+    ) {
+      return res.status(502).json({
+        success: false,
+        message:
+          "Resume uploaded, but AI analysis failed. Please try again.",
+      });
+    }
+
+    // ==================================================
+    // PDF Extraction Error
+    // ==================================================
+
+    if (
+      error.message?.includes(
+        "Failed to parse PDF"
+      ) ||
+      error.message?.includes(
+        "Unable to extract"
+      )
+    ) {
+      return res.status(422).json({
+        success: false,
+        message:
+          "Unable to read the uploaded PDF. Please upload a text-based PDF.",
+      });
+    }
+
+    // ==================================================
+    // Generic Error
+    // ==================================================
+
+    return res.status(500).json({
       success: false,
-      message: "Failed to upload resume.",
+      message:
+        "Failed to upload and analyze resume.",
     });
-
   }
 };
 
@@ -96,20 +266,23 @@ export const getMyResumes = async (req, res) => {
       createdAt: -1,
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       resumes,
     });
 
   } catch (error) {
 
-    console.error("Get Resumes Error:", error);
+    console.error(
+      "Get Resumes Error:",
+      error
+    );
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: "Failed to fetch resumes.",
+      message:
+        "Failed to fetch resumes.",
     });
-
   }
 };
 
@@ -117,7 +290,10 @@ export const getMyResumes = async (req, res) => {
 // Get Resume Analysis
 // ======================================================
 
-export const getResumeAnalysis = async (req, res) => {
+export const getResumeAnalysis = async (
+  req,
+  res
+) => {
   try {
 
     const resume = await Resume.findOne({
@@ -128,93 +304,145 @@ export const getResumeAnalysis = async (req, res) => {
     if (!resume) {
       return res.status(404).json({
         success: false,
-        message: "Resume not found.",
+        message:
+          "Resume not found.",
       });
     }
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       resume,
     });
 
   } catch (error) {
 
-    console.error("Resume Analysis Error:", error);
+    console.error(
+      "Resume Analysis Error:",
+      error
+    );
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: "Failed to fetch resume analysis.",
+      message:
+        "Failed to fetch resume analysis.",
     });
-
   }
 };
+
 // ======================================================
 // Dashboard Statistics
 // ======================================================
 
-export const getDashboardStats = async (req, res) => {
+export const getDashboardStats = async (
+  req,
+  res
+) => {
   try {
+
     const resumes = await Resume.find({
       user: req.user.id,
     }).sort({
       createdAt: -1,
     });
 
-    const totalResumes = resumes.length;
+    const totalResumes =
+      resumes.length;
+
+    const completedResumes =
+      resumes.filter(
+        (resume) =>
+          resume.analysisStatus ===
+          "Completed"
+      );
+
+    const completedCount =
+      completedResumes.length;
 
     const averageScore =
-      totalResumes > 0
+      completedCount > 0
         ? Math.round(
-            resumes.reduce(
-              (sum, resume) => sum + (resume.score || 0),
+            completedResumes.reduce(
+              (sum, resume) =>
+                sum +
+                (resume.score || 0),
               0
-            ) / totalResumes
+            ) / completedCount
           )
         : 0;
 
     const bestScore =
-      totalResumes > 0
+      completedCount > 0
         ? Math.max(
-            ...resumes.map(
-              (resume) => resume.score || 0
+            ...completedResumes.map(
+              (resume) =>
+                resume.score || 0
             )
           )
         : 0;
 
-    const pendingAnalysis = resumes.filter(
-      (resume) =>
-        resume.analysisStatus !== "Completed"
-    ).length;
+    const pendingAnalysis =
+      resumes.filter(
+        (resume) =>
+          resume.analysisStatus ===
+          "Pending"
+      ).length;
 
-    const totalSuggestions = resumes.reduce(
-      (count, resume) =>
-        count + (resume.suggestions?.length || 0),
-      0
-    );
+    const failedAnalysis =
+      resumes.filter(
+        (resume) =>
+          resume.analysisStatus ===
+          "Failed"
+      ).length;
+
+    const totalSuggestions =
+      completedResumes.reduce(
+        (count, resume) =>
+          count +
+          (resume.suggestions
+            ?.length || 0),
+        0
+      );
 
     const latestResume =
-      totalResumes > 0 ? resumes[0] : null;
+      totalResumes > 0
+        ? resumes[0]
+        : null;
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
+
       totalResumes,
-      averageScore,
-      bestScore,
+
+      completedAnalysis:
+        completedCount,
+
       pendingAnalysis,
+
+      failedAnalysis,
+
+      averageScore,
+
+      bestScore,
+
       totalSuggestions,
+
       latestResume,
+
       resumes,
     });
 
   } catch (error) {
 
-    console.error("Dashboard Error:", error);
+    console.error(
+      "Dashboard Error:",
+      error
+    );
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: "Failed to load dashboard statistics.",
+      message:
+        "Failed to load dashboard statistics.",
     });
-
   }
 };
 
@@ -222,24 +450,30 @@ export const getDashboardStats = async (req, res) => {
 // Delete Resume
 // ======================================================
 
-export const deleteResume = async (req, res) => {
+export const deleteResume = async (
+  req,
+  res
+) => {
   try {
 
-    const resume = await Resume.findOne({
-      _id: req.params.id,
-      user: req.user.id,
-    });
+    const resume =
+      await Resume.findOne({
+        _id: req.params.id,
+        user: req.user.id,
+      });
 
     if (!resume) {
       return res.status(404).json({
         success: false,
-        message: "Resume not found.",
+        message:
+          "Resume not found.",
       });
     }
 
     await s3.send(
       new DeleteObjectCommand({
-        Bucket: process.env.AWS_BUCKET_NAME,
+        Bucket:
+          process.env.AWS_BUCKET_NAME,
         Key: resume.fileName,
       })
     );
@@ -248,55 +482,68 @@ export const deleteResume = async (req, res) => {
       resume._id
     );
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: "Resume deleted successfully.",
+      message:
+        "Resume deleted successfully.",
     });
 
   } catch (error) {
 
-    console.error("Delete Resume Error:", error);
+    console.error(
+      "Delete Resume Error:",
+      error
+    );
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: "Failed to delete resume.",
+      message:
+        "Failed to delete resume.",
     });
-
   }
 };
+
 // ======================================================
 // Secure Download Resume
 // ======================================================
 
-export const getSecureDownloadUrl = async (req, res) => {
+export const getSecureDownloadUrl = async (
+  req,
+  res
+) => {
   try {
 
-    const resume = await Resume.findOne({
-      _id: req.params.id,
-      user: req.user.id,
-    });
+    const resume =
+      await Resume.findOne({
+        _id: req.params.id,
+        user: req.user.id,
+      });
 
     if (!resume) {
       return res.status(404).json({
         success: false,
-        message: "Resume not found.",
+        message:
+          "Resume not found.",
       });
     }
 
-    const command = new GetObjectCommand({
-      Bucket: process.env.AWS_BUCKET_NAME,
-      Key: resume.fileName,
-    });
+    const command =
+      new GetObjectCommand({
+        Bucket:
+          process.env.AWS_BUCKET_NAME,
+        Key: resume.fileName,
+      });
 
-    const signedUrl = await getSignedUrl(
-      s3,
-      command,
-      {
-        expiresIn: 300, // 5 Minutes
-      }
-    );
+    const signedUrl =
+      await getSignedUrl(
+        s3,
+        command,
+        {
+          expiresIn: 300,
+        }
+      );
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       url: signedUrl,
       expiresIn: 300,
@@ -309,11 +556,10 @@ export const getSecureDownloadUrl = async (req, res) => {
       error
     );
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message:
         "Failed to generate secure download link.",
     });
-
   }
 };

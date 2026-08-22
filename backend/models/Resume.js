@@ -23,10 +23,14 @@ const resumeSchema = new mongoose.Schema(
       required: true,
     },
 
-    // ===== AI Analysis =====
+    // ==================================================
+    // AI Analysis
+    // ==================================================
 
     score: {
       type: Number,
+      min: 0,
+      max: 100,
       default: 0,
     },
 
@@ -34,6 +38,86 @@ const resumeSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+
+    // ==================================================
+    // Resume Context
+    // ==================================================
+
+    detectedDomain: {
+      type: String,
+      default: "",
+    },
+
+    targetRoles: {
+      type: [String],
+      default: [],
+    },
+
+    // ==================================================
+    // ATS Score Breakdown
+    // ==================================================
+
+    scoreBreakdown: {
+      technicalSkills: {
+        type: Number,
+        min: 0,
+        max: 20,
+        default: 0,
+      },
+
+      experience: {
+        type: Number,
+        min: 0,
+        max: 20,
+        default: 0,
+      },
+
+      projects: {
+        type: Number,
+        min: 0,
+        max: 15,
+        default: 0,
+      },
+
+      education: {
+        type: Number,
+        min: 0,
+        max: 10,
+        default: 0,
+      },
+
+      certifications: {
+        type: Number,
+        min: 0,
+        max: 10,
+        default: 0,
+      },
+
+      achievements: {
+        type: Number,
+        min: 0,
+        max: 10,
+        default: 0,
+      },
+
+      keywords: {
+        type: Number,
+        min: 0,
+        max: 10,
+        default: 0,
+      },
+
+      atsCompatibility: {
+        type: Number,
+        min: 0,
+        max: 5,
+        default: 0,
+      },
+    },
+
+    // ==================================================
+    // Detailed AI Feedback
+    // ==================================================
 
     strengths: {
       type: [String],
@@ -55,10 +139,19 @@ const resumeSchema = new mongoose.Schema(
       default: [],
     },
 
+    // ==================================================
+    // Analysis Status
+    // ==================================================
+
     analysisStatus: {
       type: String,
       enum: ["Pending", "Completed", "Failed"],
       default: "Pending",
+    },
+
+    analysisError: {
+      type: String,
+      default: "",
     },
   },
   {
