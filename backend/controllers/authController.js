@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 
 import { sendEmail } from "../services/emailService.js";
 import { generateOTP } from "../utils/generateOTP.js";
+import { OAuth2Client } from "google-auth-library";
 
 // ================== SIGNUP ==================
 
@@ -572,6 +573,12 @@ export const login = async (req, res) => {
       });
 
     }
+    if (!user.password) {
+      return res.status(400).json({
+        success: false,
+        message: "This account uses Google sign-in. Please continue with Google.",
+      });
+}
 
     const isMatch = await bcrypt.compare(
       password,
@@ -649,4 +656,100 @@ export const getProfile = async (req, res) => {
 
   }
 
+};
+
+const googleClient = new OAuth2Client(
+  process.env.GOOGLE_CLIENT_ID
+);
+
+export const googleLogin = async (req, res) => {
+  try {
+    const { credential } = req.body;
+
+    if (!credential) {
+      return res.status(400).json({
+        success: false,
+        message: "Google credential is required.",
+      });
+    }
+
+    if (!process.env.GOOGLE_CLIENT_ID) {
+      return res.status(500).json({
+        success: false,
+        message: "Google authentication is not configured.",
+      });
+    }
+
+    const ticket = await googleClient.verifyIdToken({
+      idToken: credential,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+
+    const payload = ticket.getPayload();
+
+    if (!payload || !payload.sub || !payload.email) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid Google account information.",
+      });
+    }
+
+    if (!payload.email_verified) {
+      return res.status(401).json({
+        success: false,
+        message: "Your Google email must be verified.",
+      });
+    }
+
+    const email = payload.email.toLowerCase().trim();
+
+    let user = await User.findOne({ googleId: payload.sub });
+
+    if (!user) {
+      user = await User.findOne({ email });
+
+      // Never automatically link Google to an existing account.
+      // The user must first sign in using the existing method.
+      if (user) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "An account with this email already exists. Please log in using your existing method first.",
+        });
+      }
+
+      user = await User.create({
+        name: payload.name || email.split("@")[0],
+        email,
+        googleId: payload.sub,
+        avatar: payload.picture || "",
+        isVerified: true,
+      });
+    }
+
+    const token = jwt.sign(
+      { id: user._id },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Google login successful.",
+      token,
+      user: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        avatar: user.avatar,
+      },
+    });
+  } catch (error) {
+    console.error("Google login error:", error.message);
+
+    return res.status(401).json({
+      success: false,
+      message: "Google authentication failed. Please try again.",
+    });
+  }
 };

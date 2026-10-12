@@ -1,3 +1,4 @@
+
 import mongoose from "mongoose";
 
 const userSchema = new mongoose.Schema(
@@ -5,25 +6,41 @@ const userSchema = new mongoose.Schema(
     name: {
       type: String,
       required: true,
+      trim: true,
     },
 
     email: {
       type: String,
       required: true,
       unique: true,
+      lowercase: true,
+      trim: true,
     },
 
     password: {
       type: String,
-      required: true,
+      required: false,
+      select: false,
     },
 
+    googleId: {
+      type: String,
+      default: null,
+      sparse: true,
+    },
+
+    // External avatar URL, including Google profile pictures.
     avatar: {
       type: String,
       default: "",
     },
 
-    // Email Verification
+    // S3 key for an avatar uploaded directly to ResumeIQ.
+    avatarKey: {
+      type: String,
+      default: "",
+    },
+
     isVerified: {
       type: Boolean,
       default: false,
@@ -38,15 +55,16 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+
     resetOTP: {
-  type: String,
-  default: null,
+      type: String,
+      default: null,
     },
 
     resetOTPExpires: {
-  type: Date,
-  default: null,
-},
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,
